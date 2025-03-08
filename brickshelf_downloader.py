@@ -1,6 +1,8 @@
 import os
 import requests
+import re
 from bs4 import BeautifulSoup
+from datetime import datetime
 import urllib.parse
 import time
 from requests.adapters import HTTPAdapter
@@ -11,7 +13,7 @@ session = requests.Session()
 retries = Retry(total=5, backoff_factor=1, status_forcelist=[502, 503, 504])
 session.mount('https://', HTTPAdapter(max_retries=retries))
 
-def download_image(url, path):
+def download_image(url, path, date=None):
     if os.path.exists(path):
         print(f"File already exists, skipping: {path}")
         return
@@ -23,6 +25,18 @@ def download_image(url, path):
         with open(path, 'wb') as f:
             f.write(response.content)
         print(f"Downloaded: {path}")
+		
+        if date:
+            timestamp = datetime.strptime(date, "%Y/%m/%d %H:%M:%S").timestamp()
+        else:
+            last_modified = response.headers.get("Last-Modified")
+            if last_modified:
+                parsed_date = datetime.strptime(last_modified, "%a, %d %b %Y %H:%M:%S %Z")
+                timestamp = time.mktime(parsed_date.timetuple())
+            else:
+                return
+				
+        os.utime(path, (timestamp, timestamp))
     except requests.RequestException as e:
         print(f"Error downloading {url}: {str(e)}")
 
@@ -87,12 +101,17 @@ def process_gallery(base_url, url, base_path, visited=None):
             img_page = session.get(img_page_url, timeout=30)
             img_page.raise_for_status()
             img_soup = BeautifulSoup(img_page.text, 'html.parser')
+			
+            last_modified_text = img_soup.find(string=re.compile("File uploaded:"))
+            print(f"{last_modified_text}")
+            last_modified_date = last_modified_text.split("File uploaded:")[-1].strip()
+			
             full_img_link = img_soup.find('a', href=lambda href: href and href.endswith(('.jpg', '.png', '.gif')))
             if full_img_link:
                 full_img_url = urllib.parse.urljoin(base_url, full_img_link['href'])
                 print(f"Full size image URL: {full_img_url}")
                 file_name = os.path.basename(full_img_url)
-                download_image(full_img_url, os.path.join(current_path, file_name))
+                download_image(full_img_url, os.path.join(current_path, file_name),last_modified_date)
             else:
                 print(f"No full-size image found on page: {img_page_url}")
         except requests.RequestException as e:
